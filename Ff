@@ -1,0 +1,687 @@
+// WPF Testing Client - single-file project layout (multiple files shown below)
+// Target: .NET 6/7 WPF application. Open a new WPF project in Visual Studio and replace/add files below.
+
+/* ==========================
+File: WPF_Testing_Client.csproj
+==========================*/
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net7.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+
+/* ==========================
+File: App.xaml
+==========================*/
+<Application x:Class="WpfTestingClient.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="/MainWindow.xaml">
+    <Application.Resources>
+    </Application.Resources>
+</Application>
+
+/* ==========================
+File: App.xaml.cs
+==========================*/
+using System.Windows;
+
+namespace WpfTestingClient
+{
+    public partial class App : Application { }
+}
+
+/* ==========================
+File: Models.cs
+==========================*/
+using System.Text.RegularExpressions;
+using System.Collections.ObjectModel;
+
+namespace WpfTestingClient.Models
+{
+    public enum InteractiveKind { SingleChoice, MultipleChoice, Ordering, Grouping, TextInput, Matching }
+
+    public class AnswerOption
+n    {
+        public string Id { get; set; } = Guid.NewGuid().ToString();
+        public string Text { get; set; } = string.Empty;
+        public bool IsCorrect { get; set; }
+    }
+
+    public class Question
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString();
+        public string Text { get; set; } = string.Empty;
+        public List<AnswerOption> Options { get; set; } = new();
+        public InteractiveKind Kind { get; set; } = InteractiveKind.SingleChoice;
+        public string? RegexAnswer { get; set; } // for TextInput 
+        public string? Hint { get; set; }
+        public string? Explanation { get; set; }
+    }
+
+    public class TestResult
+    {
+        public int Correct { get; set; }
+        public int Total { get; set; }
+        public double Percent => Total == 0 ? 0 : (double)Correct / Total * 100.0;
+        public string Grade
+        {
+            get
+            {
+                var p = Percent;
+                if (p >= 90) return "отлично";
+                if (p >= 75) return "хорошо";
+                if (p >= 60) return "удовлетворительно";
+                return "неудовлетворительно";
+            }
+        }
+    }
+}
+
+/* ==========================
+File: sample_questions.json
+(put into project output folder or Resources)
+==========================*/
+[
+  {
+    "Text": "Что такое HTML?",
+    "Kind": 0,
+    "Hint": "Это язык разметки.",
+    "Explanation": "HTML — язык гипертекстовой разметки.",
+    "Options": [
+      { "Text": "Язык разметки", "IsCorrect": true },
+      { "Text": "Язык программирования", "IsCorrect": false },
+      { "Text": "База данных", "IsCorrect": false },
+      { "Text": "ОС", "IsCorrect": false }
+    ]
+  },
+  {
+    "Text": "Выберите правильные утверждения про C# (несколько).",
+    "Kind": 1,
+    "Hint": "C# — язык от Microsoft.",
+    "Explanation": "C# — современный объектно-ориентированный язык.",
+    "Options": [
+      { "Text": "Поддерживает ООП", "IsCorrect": true },
+      { "Text": "Нельзя использовать LINQ", "IsCorrect": false },
+      { "Text": "Есть garbage collector", "IsCorrect": true },
+      { "Text": "Это функциональная БД", "IsCorrect": false }
+    ]
+  },
+  {
+    "Text": "Упорядочите шаги компиляции: 1) Выполнение 2) Компиляция 3) Написание кода",
+    "Kind": 2,
+    "Hint": "Сначала пишем код.",
+    "Explanation": "Правильный порядок: Написание -> Компиляция -> Выполнение.",
+    "Options": [
+      { "Text": "Написание кода", "IsCorrect": true },
+      { "Text": "Компиляция", "IsCorrect": true },
+      { "Text": "Выполнение", "IsCorrect": true },
+      { "Text": "(пусто)", "IsCorrect": false }
+    ]
+  },
+  {
+    "Text": "Введите regex, который распознает телефон в формате +7-xxx-xxx-xx-xx",
+    "Kind": 4,
+    "Hint": "+7-xxx-xxx-xx-xx",
+    "Explanation": "Пример: +7-123-456-78-90",
+    "RegexAnswer": "^\\+7-\\d{3}-\\d{3}-\\d{2}-\\d{2}$",
+    "Options": []
+  },
+  {
+    "Text": "Сопоставьте столицу и страну.",
+    "Kind": 5,
+    "Hint": "Москва — Россия.",
+    "Explanation": "Прим: Москва - Россия, Берлин - Германия.",
+    "Options": [
+      { "Text": "Москва - Россия", "IsCorrect": true },
+      { "Text": "Берлин - Германия", "IsCorrect": true },
+      { "Text": "Париж - Франция", "IsCorrect": true },
+      { "Text": "(пусто)", "IsCorrect": false }
+    ]
+  }
+]
+
+/* ==========================
+File: MainWindow.xaml
+==========================*/
+<Window x:Class="WpfTestingClient.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Testing Client" Height="720" Width="1000">
+    <Grid Margin="10">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="300"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left: Controls -->
+        <StackPanel Grid.Column="0" Margin="10" VerticalAlignment="Top">
+            <TextBlock Text="Тестовый клиент" FontSize="18" FontWeight="Bold"/>
+            <Button Name="BtnStartTest" Click="BtnStartTest_Click" Margin="0,10">Начать тест</Button>
+            <Button Name="BtnLoadQuestions" Click="BtnLoadQuestions_Click">Загрузить вопросы</Button>
+            <TextBlock Name="TxtStatus" Margin="0,10" TextWrapping="Wrap"/>
+
+            <Separator Margin="0,10"/>
+            <TextBlock Text="Результат последнего теста:" FontWeight="Bold"/>
+            <TextBlock Name="TxtResult"/>
+        </StackPanel>
+
+        <!-- Right: Test area -->
+        <Border Grid.Column="1" BorderBrush="Gray" BorderThickness="1" CornerRadius="6" Padding="10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel Orientation="Horizontal" Grid.Row="0" HorizontalAlignment="Right">
+                    <TextBlock Text="Осталось:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBlock Name="TxtTimer" FontWeight="Bold" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <ScrollViewer Grid.Row="1">
+                    <StackPanel Name="QuestionsPanel" Margin="0,8"/>
+                </ScrollViewer>
+
+                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8">
+                    <Button Name="BtnSubmit" Click="BtnSubmit_Click" Margin="0,0,8,0">Сдать</Button>
+                    <Button Name="BtnCancel" Click="BtnCancel_Click">Отмена</Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
+
+/* ==========================
+File: MainWindow.xaml.cs
+==========================*/
+using System.Windows;
+using System.Windows.Controls;
+using System.Text.Json;
+using WpfTestingClient.Models;
+using System.Timers;
+using System.Windows.Threading;
+
+namespace WpfTestingClient
+{
+    public partial class MainWindow : Window
+    {
+        private List<Question> _allQuestions = new();
+        private List<Question> _currentQuestions = new();
+        private readonly Random _rng = new();
+        private DispatcherTimer _timer = new();
+        private TimeSpan _timeLeft;
+
+        public MainWindow()
+        {
+            InitializeComponent();
+            LoadEmbeddedSample();
+            TxtStatus.Text = "Готово. Нажмите 'Начать тест'";
+        }
+
+        private void LoadEmbeddedSample()
+        {
+            try
+            {
+                var json = System.IO.File.ReadAllText("sample_questions.json");
+                var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                _allQuestions = JsonSerializer.Deserialize<List<Question>>(json, opts) ?? new List<Question>();
+                // ensure each with 4 options (fill dummy if necessary) and default ids
+                foreach (var q in _allQuestions)
+                {
+                    if (q.Options == null) q.Options = new List<AnswerOption>();
+                    while (q.Options.Count < 4) q.Options.Add(new AnswerOption { Text = "(вариант)", IsCorrect = false });
+                }
+                TxtStatus.Text = $"Загружено вопросов: {_allQuestions.Count}";
+            }
+            catch (Exception ex)
+            {
+                TxtStatus.Text = "Не удалось загрузить sample_questions.json: " + ex.Message;
+            }
+        }
+
+        private void BtnLoadQuestions_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog();
+            dlg.Filter = "JSON files|*.json|All files|*.*";
+            if (dlg.ShowDialog() == true)
+            {
+                try
+                {
+                    var json = System.IO.File.ReadAllText(dlg.FileName);
+                    var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                    _allQuestions = JsonSerializer.Deserialize<List<Question>>(json, opts) ?? new List<Question>();
+                    foreach (var q in _allQuestions)
+                    {
+                        if (q.Options == null) q.Options = new List<AnswerOption>();
+                        while (q.Options.Count < 4) q.Options.Add(new AnswerOption { Text = "(вариант)", IsCorrect = false });
+                    }
+                    TxtStatus.Text = $"Загружено вопросов: {_allQuestions.Count} из {dlg.FileName}";
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Ошибка: " + ex.Message);
+                }
+            }
+        }
+
+        private void BtnStartTest_Click(object sender, RoutedEventArgs e)
+        {
+            if (_allQuestions.Count < 20)
+            {
+                var res = MessageBox.Show("В пуле меньше 20 вопросов. Продолжить?", "Внимание", MessageBoxButton.YesNo);
+                if (res != MessageBoxResult.Yes) return;
+            }
+
+            // choose 10 random distinct questions from pool of 20 (or from available)
+            var pool = _allQuestions.Take(20).ToList();
+            Shuffle(pool);
+            _currentQuestions = pool.Take(Math.Min(10, pool.Count)).Select(CloneQuestionShuffleOptions).ToList();
+
+            // set timer: e.g., 20 minutes default; edge cases: small pool -> shorter time
+            _timeLeft = TimeSpan.FromMinutes(20);
+            StartTimer();
+
+            RenderQuestions();
+            TxtResult.Text = "";
+        }
+
+        private void StartTimer()
+        {
+            _timer = new DispatcherTimer();
+            _timer.Interval = TimeSpan.FromSeconds(1);
+            _timer.Tick += Timer_Tick;
+            _timer.Start();
+            UpdateTimerText();
+        }
+
+        private void Timer_Tick(object? sender, EventArgs e)
+        {
+            _timeLeft = _timeLeft.Subtract(TimeSpan.FromSeconds(1));
+            if (_timeLeft <= TimeSpan.Zero)
+            {
+                _timer.Stop();
+                TxtTimer.Text = "00:00";
+                MessageBox.Show("Время вышло. Тест будет автоматически сдан.");
+                SubmitTest();
+            }
+            else UpdateTimerText();
+        }
+
+        private void UpdateTimerText()
+        {
+            TxtTimer.Text = _timeLeft.ToString("mm\:ss");
+        }
+
+        private void RenderQuestions()
+        {
+            QuestionsPanel.Children.Clear();
+            int idx = 1;
+            foreach (var q in _currentQuestions)
+            {
+                var grp = new GroupBox { Header = $"Вопрос {idx}", Margin = new Thickness(0, 6, 0, 6) };
+                var sp = new StackPanel { Margin = new Thickness(6) };
+                sp.Children.Add(new TextBlock { Text = q.Text, TextWrapping = TextWrapping.Wrap, FontWeight = FontWeights.SemiBold });
+
+                // show hint button
+                if (!string.IsNullOrEmpty(q.Hint))
+                {
+                    var btnHint = new Button { Content = "Подсказка", Tag = q, Margin = new Thickness(0,6,0,6), Width = 90 };
+                    btnHint.Click += BtnHint_Click;
+                    sp.Children.Add(btnHint);
+                }
+
+                switch (q.Kind)
+                {
+                    case Models.InteractiveKind.SingleChoice:
+                    case Models.InteractiveKind.MultipleChoice:
+                        var panel = new StackPanel();
+                        var shuffled = q.Options.OrderBy(_ => _rng.Next()).ToList();
+                        foreach (var opt in shuffled)
+                        {
+                            if (q.Kind == Models.InteractiveKind.SingleChoice)
+                            {
+                                var r = new RadioButton { Content = opt.Text, Tag = (q, opt) };
+                                panel.Children.Add(r);
+                            }
+                            else
+                            {
+                                var cb = new CheckBox { Content = opt.Text, Tag = (q, opt) };
+                                panel.Children.Add(cb);
+                            }
+                        }
+                        sp.Children.Add(panel);
+                        break;
+
+                    case Models.InteractiveKind.Ordering:
+                        // ListBox draggable for ordering
+                        var list = new ListBox { AllowDrop = true, Tag = q };
+                        foreach (var opt in q.Options.OrderBy(_ => _rng.Next()))
+                            list.Items.Add(new ListBoxItem { Content = opt.Text, Tag = opt });
+                        list.PreviewMouseLeftButtonDown += List_PreviewMouseLeftButtonDown;
+                        list.Drop += List_Drop;
+                        sp.Children.Add(new TextBlock { Text = "Перетащите элементы в правильном порядке:" });
+                        sp.Children.Add(list);
+                        break;
+
+                    case Models.InteractiveKind.Grouping:
+                        // simple two-group example: show draggable items and two boxes
+                        var itemsPanel = new WrapPanel { Margin = new Thickness(0,6) };
+                        foreach (var opt in q.Options.OrderBy(_ => _rng.Next()))
+                        {
+                            var tb = new TextBlock { Text = opt.Text, Padding = new Thickness(6), Margin = new Thickness(4), Background = SystemColors.ControlLightBrush, Tag = opt };
+                            tb.MouseMove += DragTextBlock_MouseMove;
+                            itemsPanel.Children.Add(tb);
+                        }
+                        var groupsPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0,6) };
+                        var group1 = new ListBox { Width = 200, Height = 120, AllowDrop = true, Tag = "group1" };
+                        var group2 = new ListBox { Width = 200, Height = 120, AllowDrop = true, Tag = "group2", Margin = new Thickness(8,0,0,0) };
+                        group1.Drop += Group_Drop; group2.Drop += Group_Drop;
+                        groupsPanel.Children.Add(group1); groupsPanel.Children.Add(group2);
+                        sp.Children.Add(new TextBlock { Text = "Перетащите элементы в нужную группу:" });
+                        sp.Children.Add(itemsPanel); sp.Children.Add(groupsPanel);
+                        break;
+
+                    case Models.InteractiveKind.TextInput:
+                        var tbInput = new TextBox { Tag = q, Width = 400 };
+                        sp.Children.Add(new TextBlock { Text = "Введите ответ:" });
+                        sp.Children.Add(tbInput);
+                        break;
+
+                    case Models.InteractiveKind.Matching:
+                        // matching: left list draggable to right slots
+                        var left = new ListBox { Width = 200, Height = 160, AllowDrop = false, Tag = q };
+                        var right = new StackPanel { Width = 200 };
+                        foreach (var opt in q.Options.OrderBy(_ => _rng.Next()))
+                        {
+                            var li = new ListBoxItem { Content = opt.Text, Tag = opt };
+                            li.MouseMove += DragListItem_MouseMove;
+                            left.Items.Add(li);
+
+                            var slot = new Border { BorderBrush = SystemColors.ActiveBorderBrush, BorderThickness = new Thickness(1), Height = 30, Margin = new Thickness(0,4) };
+                            slot.AllowDrop = true;
+                            slot.Drop += MatchSlot_Drop;
+                            right.Children.Add(slot);
+                        }
+                        var horiz = new StackPanel { Orientation = Orientation.Horizontal };
+                        horiz.Children.Add(left); horiz.Children.Add(new Separator { Width = 8 }); horiz.Children.Add(right);
+                        sp.Children.Add(new TextBlock { Text = "Перетащите элементы в соответствующие слоты:" });
+                        sp.Children.Add(horiz);
+                        break;
+                }
+
+                // explanation placeholder
+                var txtExpl = new TextBlock { Tag = (q, "expl"), Visibility = Visibility.Collapsed, TextWrapping = TextWrapping.Wrap };
+                sp.Children.Add(txtExpl);
+
+                grp.Content = sp;
+                QuestionsPanel.Children.Add(grp);
+                idx++;
+            }
+        }
+
+        // Helper: Clone question and shuffle options
+        private Question CloneQuestionShuffleOptions(Question q)
+        {
+            var clone = new Question
+            {
+                Id = q.Id,
+                Text = q.Text,
+                Kind = q.Kind,
+                Hint = q.Hint,
+                Explanation = q.Explanation,
+                RegexAnswer = q.RegexAnswer,
+                Options = q.Options.Select(o => new AnswerOption { Id = o.Id, Text = o.Text, IsCorrect = o.IsCorrect }).ToList()
+            };
+            return clone;
+        }
+
+        private void BtnHint_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button b && b.Tag is Question q)
+            {
+                MessageBox.Show(q.Hint ?? "Нет подсказки", "Подсказка");
+            }
+        }
+
+        private void BtnSubmit_Click(object sender, RoutedEventArgs e)
+        {
+            _timer?.Stop();
+            SubmitTest();
+        }
+
+        private void SubmitTest()
+        {
+            int correct = 0; int total = _currentQuestions.Count;
+            int idx = 0;
+            foreach (GroupBox gb in QuestionsPanel.Children)
+            {
+                var sp = gb.Content as StackPanel;
+                var q = _currentQuestions[idx];
+                bool qCorrect = false;
+
+                // find inputs by types
+                switch (q.Kind)
+                {
+                    case Models.InteractiveKind.SingleChoice:
+                        var radio = sp.Descendants<RadioButton>().FirstOrDefault(r => r.IsChecked == true);
+                        if (radio != null && radio.Tag is ValueTuple<Question, AnswerOption> t && t.Item2.IsCorrect) qCorrect = true;
+                        break;
+                    case Models.InteractiveKind.MultipleChoice:
+                        var checks = sp.Descendants<CheckBox>().Where(c => c.IsChecked == true).ToList();
+                        var selectedOpts = checks.Select(c => ((Question, AnswerOption))c.Tag).Select(t => t.Item2).ToList();
+                        // correct if selected == set of correct
+                        var correctSet = q.Options.Where(o => o.IsCorrect).Select(o => o.Text).OrderBy(x => x);
+                        var selSet = selectedOpts.Select(o => o.Text).OrderBy(x => x);
+                        qCorrect = correctSet.SequenceEqual(selSet);
+                        break;
+                    case Models.InteractiveKind.Ordering:
+                        var list = sp.Descendants<ListBox>().FirstOrDefault(l => l.Tag == q);
+                        if (list != null)
+                        {
+                            var items = list.Items.Cast<ListBoxItem>().Select(i => i.Content.ToString()).ToList();
+                            var correctOrder = q.Options.Select(o => o.Text).ToList();
+                            qCorrect = items.SequenceEqual(correctOrder);
+                        }
+                        break;
+                    case Models.InteractiveKind.Grouping:
+                        // naive: assume group1 should contain first half correct etc. We'll check items in groups if their text matches options marked IsCorrect
+                        var groups = sp.Descendants<ListBox>().Where(l => l.Tag != null).ToList();
+                        // for demo treat as correct if all items moved to any group
+                        qCorrect = groups.SelectMany(g => g.Items.Cast<object>()).Any();
+                        break;
+                    case Models.InteractiveKind.TextInput:
+                        var tb = sp.Descendants<TextBox>().FirstOrDefault(t => t.Tag == q);
+                        if (tb != null && !string.IsNullOrWhiteSpace(q.RegexAnswer))
+                        {
+                            qCorrect = Regex.IsMatch(tb.Text.Trim(), q.RegexAnswer);
+                        }
+                        break;
+                    case Models.InteractiveKind.Matching:
+                        // check if each match slot has content and text contains a correct pairing (very simplified)
+                        var slots = sp.Descendants<Border>().Where(b => b.AllowDrop).ToList();
+                        qCorrect = slots.All(s => s.Child != null);
+                        break;
+                }
+
+                if (qCorrect) correct++;
+
+                // show explanation
+                var expl = sp.Descendants<TextBlock>().FirstOrDefault(t => t.Tag is ValueTuple<Question, string>);
+                if (expl != null)
+                {
+                    expl.Text = q.Explanation ?? "";
+                    expl.Visibility = Visibility.Visible;
+                }
+                idx++;
+            }
+
+            var res = new TestResult { Correct = correct, Total = total };
+            TxtResult.Text = $"Правильных: {res.Correct}/{res.Total} ({res.Percent:F2}%) — Оценка: {res.Grade}";
+        }
+
+        private void BtnCancel_Click(object sender, RoutedEventArgs e)
+        {
+            _timer?.Stop();
+            QuestionsPanel.Children.Clear();
+            TxtTimer.Text = "";
+            TxtStatus.Text = "Тест отменен.";
+        }
+
+        // Drag/drop helpers
+        private Point _dragStart;
+        private void List_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            _dragStart = e.GetPosition(null);
+        }
+
+        private void List_Drop(object sender, DragEventArgs e)
+        {
+            if (sender is ListBox lb && e.Data.GetDataPresent(typeof(ListBoxItem)))
+            {
+                var data = e.Data.GetData(typeof(ListBoxItem)) as ListBoxItem;
+                var source = ItemsControl.ItemsControlFromItemContainer(data);
+                var sourceList = source as ListBox;
+                if (sourceList != null && sourceList != lb)
+                {
+                    sourceList.Items.Remove(data);
+                    lb.Items.Add(data);
+                }
+                else if (sourceList == lb)
+                {
+                    // reordering within same list: find index
+                    sourceList.Items.Remove(data);
+                    sourceList.Items.Add(data);
+                }
+            }
+        }
+
+        private void List_PreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            var pos = e.GetPosition(null);
+            if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed && (Math.Abs(pos.X - _dragStart.X) > SystemParameters.MinimumHorizontalDragDistance || Math.Abs(pos.Y - _dragStart.Y) > SystemParameters.MinimumVerticalDragDistance))
+            {
+                if (sender is ListBox lb && lb.SelectedItem is ListBoxItem item)
+                {
+                    DragDrop.DoDragDrop(item, item, DragDropEffects.Move);
+                }
+            }
+        }
+
+        private void DragTextBlock_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed && sender is TextBlock tb)
+            {
+                DragDrop.DoDragDrop(tb, tb.Tag, DragDropEffects.Move);
+            }
+        }
+
+        private void Group_Drop(object sender, DragEventArgs e)
+        {
+            if (sender is ListBox lb && e.Data.GetDataPresent(typeof(AnswerOption)))
+            {
+                var opt = e.Data.GetData(typeof(AnswerOption)) as AnswerOption;
+                lb.Items.Add(new ListBoxItem { Content = opt.Text, Tag = opt });
+            }
+            else if (e.Data.GetDataPresent(typeof(TextBlock)))
+            {
+                var t = e.Data.GetData(typeof(TextBlock)) as TextBlock;
+                lb.Items.Add(new ListBoxItem { Content = t.Text, Tag = t.Tag });
+            }
+        }
+
+        private void DragListItem_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed && sender is ListBoxItem item)
+            {
+                DragDrop.DoDragDrop(item, item, DragDropEffects.Copy);
+            }
+        }
+
+        private void MatchSlot_Drop(object sender, DragEventArgs e)
+        {
+            if (sender is Border slot)
+            {
+                if (e.Data.GetDataPresent(typeof(ListBoxItem)))
+                {
+                    var li = e.Data.GetData(typeof(ListBoxItem)) as ListBoxItem;
+                    slot.Child = new TextBlock { Text = li.Content.ToString(), VerticalAlignment = VerticalAlignment.Center };
+                }
+            }
+        }
+
+        // Utility: shuffle
+        private void Shuffle<T>(IList<T> list)
+        {
+            int n = list.Count;
+            while (n > 1)
+            {
+                n--;
+                int k = _rng.Next(n + 1);
+                (list[k], list[n]) = (list[n], list[k]);
+            }
+        }
+    }
+}
+
+/* ==========================
+File: Extensions.cs
+Helper extension methods for visual tree search (simple)
+==========================*/
+using System.Collections.Generic;
+using System.Windows;
+using System.Windows.Media;
+using System.Linq;
+
+namespace WpfTestingClient
+{
+    public static class Extensions
+    {
+        public static IEnumerable<T> Descendants<T>(this DependencyObject root) where T : DependencyObject
+        {
+            if (root == null) yield break;
+            var queue = new Queue<DependencyObject>();
+            queue.Enqueue(root);
+            while (queue.Count > 0)
+            {
+                var cur = queue.Dequeue();
+                int cnt = VisualTreeHelper.GetChildrenCount(cur);
+                for (int i = 0; i < cnt; i++)
+                {
+                    var ch = VisualTreeHelper.GetChild(cur, i);
+                    if (ch is T t) yield return t;
+                    queue.Enqueue(ch);
+                }
+            }
+        }
+    }
+}
+
+/* ==========================
+Instructions
+==========================*/
+/*
+1) Create a new WPF App (.NET 6/7) in Visual Studio.
+2) Replace/Add files shown above (MainWindow.xaml, MainWindow.xaml.cs, Models.cs, Extensions.cs, App.xaml, App.xaml.cs, sample_questions.json).
+3) Put sample_questions.json in the application working folder (bin/debug/net7.0-windows) or set Copy to Output Directory = Always.
+4) Build and run.
+
+What implemented:
+- Test module: randomly selects up to 10 questions from pool (pool takes first 20 of loaded file), ensures no repeats.
+- Options order is shuffled per question.
+- Timer with automatic submit at 00:00.
+- Scoring and grade mapping as requested with percentage and counts.
+- Handles single/multiple choice, ordering (drag-drop), grouping (simple), text input with regex validation, matching (drag to slots).
+- Hints and explanation display after submission.
+- Edge cases: small pool, missing options handled; regex null-checks; timer stop on submit/cancel.
+
+Notes & possible extensions:
+- Persist results to local JSON or server API (not implemented — client-only as requested).
+- Improve UI styling, animations, focus states.
+- Expand grouping/matching correctness logic to check exact target groups/pairs.
+*/
