@@ -1,68 +1,211 @@
-<Window x:Class="WpfClient.MainWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Клиент товаров" Height="600" Width="900"
-        WindowStartupLocation="CenterScreen">
-    <Grid Margin="10">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-        
-        <!-- Панель управления -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
-            <Button Content="📦 Список товаров" Click="GetList_Click" 
-                    Padding="15,5" FontSize="14" Background="#FF4CAF50" Foreground="White"/>
-            <Button Content="🔄 Обновить" Click="Refresh_Click" 
-                    Padding="15,5" FontSize="14" Margin="10,0,0,0" Background="#FF2196F3" Foreground="White"/>
-            <TextBlock Text="Статус:" VerticalAlignment="Center" Margin="20,0,5,0" FontWeight="Bold"/>
-            <TextBlock x:Name="StatusText" Text="Не подключено" VerticalAlignment="Center" Foreground="Red"/>
-        </StackPanel>
-        
-        <!-- Панель команд -->
-        <GroupBox Grid.Row="1" Header="Команды серверу" Margin="0,0,0,10">
-            <StackPanel Orientation="Horizontal">
-                <TextBox x:Name="InputBox" TextWrapping="Wrap" MinWidth="300" 
-                        Padding="5" FontSize="14" VerticalAlignment="Center"
-                        ToolTip="Доступные команды: list, get 1, add, update, delete, categories"/>
-                <Button Content="📤 Отправить" Click="SendCommand_Click" 
-                        Padding="15,5" FontSize="14" Margin="10,0,0,0" Background="#FF9C27B0" Foreground="White"/>
-            </StackPanel>
-        </GroupBox>
-        
-        <!-- Отображение данных -->
-        <TabControl Grid.Row="2" Margin="0,0,0,10">
-            <TabItem Header="📋 Таблица товаров">
-                <DataGrid x:Name="ProductsGrid" AutoGenerateColumns="False" 
-                         IsReadOnly="True" SelectionMode="Single"
-                         CanUserAddRows="False" CanUserDeleteRows="False">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="50"/>
-                        <DataGridTextColumn Header="Название" Binding="{Binding Name}" Width="200"/>
-                        <DataGridTextColumn Header="Описание" Binding="{Binding Description}" Width="250"/>
-                        <DataGridTextColumn Header="Цена" Binding="{Binding Price, StringFormat=C}" Width="80"/>
-                        <DataGridTextColumn Header="Категория" Binding="{Binding Category.Name}" Width="120"/>
-                        <DataGridTextColumn Header="Количество" Binding="{Binding StockQuantity}" Width="80"/>
-                        <DataGridTextColumn Header="Дата" Binding="{Binding CreatedDate, StringFormat=dd.MM.yyyy}" Width="100"/>
-                    </DataGrid.Columns>
-                </DataGrid>
-            </TabItem>
-            <TabItem Header="📄 Текстовый вывод">
-                <TextBox x:Name="OutputText" TextWrapping="Wrap" IsReadOnly="True" 
-                        VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                        FontFamily="Consolas" FontSize="12" Background="#FFF5F5F5"/>
-            </TabItem>
-        </TabControl>
-        
-        <!-- Информация о выбранном товаре -->
-        <GroupBox Grid.Row="3" Header="🔍 Детали выбранного товара">
-            <ScrollViewer MaxHeight="150" VerticalScrollBarVisibility="Auto">
-                <StackPanel>
-                    <TextBlock x:Name="SelectedProductText" TextWrapping="Wrap" Margin="5"/>
-                </StackPanel>
-            </ScrollViewer>
-        </GroupBox>
-    </Grid>
-</Window>
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+
+namespace WpfClient
+{
+    public partial class MainWindow : Window
+    {
+        private const string ServerIP = "127.0.0.1";
+        private const int ServerPort = 5000;
+
+        public MainWindow()
+        {
+            InitializeComponent();
+            StatusText.Text = "Готов к подключению";
+            StatusText.Foreground = System.Windows.Media.Brushes.Orange;
+            
+            // Подсказка для пользователя
+            InputBox.Text = "list";
+            
+            // Обработчик выбора товара в таблице
+            ProductsGrid.SelectionChanged += ProductsGrid_SelectionChanged;
+        }
+
+        private void GetList_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                string response = SendToServer("list");
+                ProcessListResponse(response);
+                StatusText.Text = "Данные загружены";
+                StatusText.Foreground = System.Windows.Media.Brushes.Green;
+            }
+            catch (Exception ex)
+            {
+                ShowError($"Ошибка при получении списка: {ex.Message}");
+            }
+        }
+
+        private void Refresh_Click(object sender, RoutedEventArgs e)
+        {
+            GetList_Click(sender, e);
+        }
+
+        private void SendCommand_Click(object sender, RoutedEventArgs e)
+        {
+            string command = InputBox.Text.Trim();
+            if (string.IsNullOrEmpty(command))
+            {
+                MessageBox.Show("Введите команду", "Предупреждение", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            try
+            {
+                string response = SendToServer(command);
+                
+                // Автоматически определяем тип команды и обрабатываем ответ
+                if (command.ToLower() == "list" || command.ToLower().StartsWith("get"))
+                {
+                    ProcessListResponse(response);
+                }
+                else
+                {
+                    OutputText.Text = FormatJsonResponse(response);
+                }
+                
+                StatusText.Text = "Команда выполнена";
+                StatusText.Foreground = System.Windows.Media.Brushes.Green;
+            }
+            catch (Exception ex)
+            {
+                ShowError($"Ошибка при выполнении команды: {ex.Message}");
+            }
+        }
+
+        private void ProductsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (ProductsGrid.SelectedItem is Product selectedProduct)
+            {
+                SelectedProductText.Text = $"ID: {selectedProduct.Id}\n" +
+                                          $"Название: {selectedProduct.Name}\n" +
+                                          $"Описание: {selectedProduct.Description}\n" +
+                                          $"Цена: {selectedProduct.Price:C}\n" +
+                                          $"Категория: {selectedProduct.Category?.Name ?? "N/A"}\n" +
+                                          $"Количество: {selectedProduct.StockQuantity}\n" +
+                                          $"Дата создания: {selectedProduct.CreatedDate:dd.MM.yyyy HH:mm}";
+            }
+        }
+
+        private string SendToServer(string message)
+        {
+            try
+            {
+                using (TcpClient client = new TcpClient())
+                {
+                    // Таймаут подключения 5 секунд
+                    if (!client.ConnectAsync(ServerIP, ServerPort).Wait(5000))
+                    {
+                        throw new TimeoutException("Превышено время ожидания подключения к серверу");
+                    }
+
+                    using (NetworkStream stream = client.GetStream())
+                    {
+                        byte[] data = Encoding.UTF8.GetBytes(message);
+                        stream.Write(data, 0, data.Length);
+
+                        // Читаем ответ с таймаутом
+                        stream.ReadTimeout = 10000;
+                        return ReadFullResponse(stream);
+                    }
+                }
+            }
+            catch (SocketException ex)
+            {
+                throw new Exception($"Не удалось подключиться к серверу: {ex.Message}");
+            }
+        }
+
+        private string ReadFullResponse(NetworkStream stream)
+        {
+            byte[] buffer = new byte[4096];
+            StringBuilder responseBuilder = new StringBuilder();
+            int bytesRead;
+
+            // Читаем все данные до конца
+            while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                responseBuilder.Append(Encoding.UTF8.GetString(buffer, 0, bytesRead));
+                
+                // Проверяем, есть ли еще данные (неблокирующая проверка)
+                if (stream.DataAvailable == false)
+                    break;
+            }
+
+            return responseBuilder.ToString();
+        }
+
+        private void ProcessListResponse(string response)
+        {
+            try
+            {
+                // Пытаемся парсить как JSON
+                var products = JsonSerializer.Deserialize<List<Product>>(response, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                ProductsGrid.ItemsSource = products;
+                OutputText.Text = $"✅ Получено {products?.Count ?? 0} товаров\n\n" + FormatJsonResponse(response);
+            }
+            catch (JsonException)
+            {
+                // Если не JSON, показываем как plain text
+                ProductsGrid.ItemsSource = null;
+                OutputText.Text = response;
+            }
+        }
+
+        private string FormatJsonResponse(string json)
+        {
+            try
+            {
+                using (JsonDocument document = JsonDocument.Parse(json))
+                {
+                    return JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions
+                    {
+                        WriteIndented = true
+                    });
+                }
+            }
+            catch
+            {
+                return json; // Возвращаем как есть, если не JSON
+            }
+        }
+
+        private void ShowError(string message)
+        {
+            StatusText.Text = "Ошибка";
+            StatusText.Foreground = System.Windows.Media.Brushes.Red;
+            OutputText.Text = $"❌ {message}";
+            MessageBox.Show(message, "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    // Модели данных для десериализации JSON
+    public class Product
+    {
+        public int Id { get; set; }
+        public string Name { get; set; }
+        public string Description { get; set; }
+        public decimal Price { get; set; }
+        public int CategoryId { get; set; }
+        public Category Category { get; set; }
+        public int StockQuantity { get; set; }
+        public DateTime CreatedDate { get; set; }
+    }
+
+    public class Category
+    {
+        public int Id { get; set; }
+        public string Name { get; set; }
+        public string Description { get; set; }
+    }
+}
